@@ -1,26 +1,18 @@
 // Keyword filtering middleware for content moderation
 const profanityWords = [
-  // Basic profanity
-  'damn', 'hell', 'crap', 'stupid', 'idiot', 'moron', 'dumb',
+  // Only actual profanity - removed common words that were being over-filtered
+  'fuck', 'shit', 'bitch', 'asshole', 'bastard', 'whore', 'slut',
   
-  // Spam indicators
+  // Spam indicators - kept as phrases to avoid false positives
   'buy now', 'click here', 'free money', 'get rich quick', 'make money fast',
-  'limited time', 'act now', 'urgent', 'congratulations you won',
+  'limited time offer', 'act now', 'congratulations you won',
   
-  // Inappropriate content
-  'hate', 'kill', 'die', 'murder', 'violence', 'hurt',
+  // Serious inappropriate content
+  'kill yourself', 'go die', 'murder', 'violence against',
   
-  // Medical advice warnings (flagged for review)
-  'cure', 'treatment', 'medicine', 'drug', 'prescription', 'diagnosis',
-  'medical advice', 'doctor says', 'take this pill',
-  
-  // Child safety concerns
-  'personal information', 'home address', 'phone number', 'school name',
-  'real name', 'where do you live', 'meet in person',
-  
-  // Scam indicators
-  'send money', 'wire transfer', 'bitcoin', 'cryptocurrency', 'investment opportunity',
-  'guaranteed return', 'risk free', 'no questions asked'
+  // Scam indicators - kept as phrases
+  'send money now', 'wire transfer urgent', 'bitcoin investment', 
+  'guaranteed return', 'risk free investment', 'no questions asked'
 ];
 
 const suspiciousPatterns = [
@@ -33,14 +25,14 @@ const suspiciousPatterns = [
   // Phone numbers
   /(\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}/gi,
   
-  // Excessive caps (more than 50% uppercase)
-  /^[A-Z\s!?.,]{10,}$/,
+  // Excessive caps (more than 70% uppercase and longer than 20 chars)
+  /^[A-Z\s!?.,]{20,}$/,
   
-  // Repeated characters
-  /(.)\1{4,}/gi,
+  // Repeated characters (5 or more)
+  /(.)\1{5,}/gi,
   
-  // Multiple exclamation marks
-  /!{3,}/gi
+  // Multiple exclamation marks (4 or more)
+  /!{4,}/gi
 ];
 
 const medicalTerms = [
@@ -62,11 +54,17 @@ const filterContent = (content) => {
   let filteredContent = content;
   let severity = 'none';
 
-  // Check for profanity
+  // Check for profanity - use word boundaries to avoid partial matches
   const lowerContent = content.toLowerCase();
-  const foundProfanity = profanityWords.filter(word => 
-    lowerContent.includes(word.toLowerCase())
-  );
+  const foundProfanity = profanityWords.filter(word => {
+    // For phrases, check if they exist as-is
+    if (word.includes(' ')) {
+      return lowerContent.includes(word.toLowerCase());
+    }
+    // For single words, use word boundaries to avoid partial matches
+    const wordRegex = new RegExp(`\\b${word.toLowerCase()}\\b`, 'i');
+    return wordRegex.test(lowerContent);
+  });
 
   if (foundProfanity.length > 0) {
     flags.push({
@@ -77,8 +75,15 @@ const filterContent = (content) => {
     
     // Replace profanity with asterisks
     foundProfanity.forEach(word => {
-      const regex = new RegExp(word, 'gi');
-      filteredContent = filteredContent.replace(regex, '*'.repeat(word.length));
+      if (word.includes(' ')) {
+        // For phrases, replace directly
+        const regex = new RegExp(word, 'gi');
+        filteredContent = filteredContent.replace(regex, '*'.repeat(word.length));
+      } else {
+        // For single words, use word boundaries
+        const regex = new RegExp(`\\b${word}\\b`, 'gi');
+        filteredContent = filteredContent.replace(regex, '*'.repeat(word.length));
+      }
     });
     
     severity = 'medium';
@@ -99,10 +104,11 @@ const filterContent = (content) => {
     }
   });
 
-  // Check for medical terms (flag for disclaimer)
-  const foundMedicalTerms = medicalTerms.filter(term => 
-    lowerContent.includes(term.toLowerCase())
-  );
+  // Check for medical terms (flag for disclaimer) - use word boundaries
+  const foundMedicalTerms = medicalTerms.filter(term => {
+    const termRegex = new RegExp(`\\b${term.toLowerCase()}\\b`, 'i');
+    return termRegex.test(lowerContent);
+  });
 
   if (foundMedicalTerms.length > 0) {
     flags.push({
@@ -114,9 +120,9 @@ const filterContent = (content) => {
     if (severity === 'none') severity = 'low';
   }
 
-  // Check for excessive caps
+  // Check for excessive caps - increased threshold
   const capsRatio = (content.match(/[A-Z]/g) || []).length / content.length;
-  if (capsRatio > 0.5 && content.length > 20) {
+  if (capsRatio > 0.7 && content.length > 20) {
     flags.push({
       type: 'excessive_caps',
       ratio: capsRatio,
@@ -126,16 +132,16 @@ const filterContent = (content) => {
     if (severity === 'none') severity = 'low';
   }
 
-  // Check for spam indicators
-  const spamWords = ['buy now', 'click here', 'free money', 'limited time'];
-  const foundSpamWords = spamWords.filter(word => 
-    lowerContent.includes(word.toLowerCase())
+  // Check for spam indicators - only check for complete phrases
+  const spamPhrases = ['buy now', 'click here', 'free money', 'limited time offer'];
+  const foundSpamPhrases = spamPhrases.filter(phrase => 
+    lowerContent.includes(phrase.toLowerCase())
   );
 
-  if (foundSpamWords.length > 0) {
+  if (foundSpamPhrases.length > 0) {
     flags.push({
       type: 'spam',
-      words: foundSpamWords,
+      words: foundSpamPhrases,
       action: 'block'
     });
     

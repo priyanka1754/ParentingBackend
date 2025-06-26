@@ -224,27 +224,32 @@ exports.getGroupById = async (req, res) => {
   }
 };
 
-// Update Group (Admin/Moderator only)
+// Update Group (Group creator or Platform admin only)
 exports.updateGroup = async (req, res) => {
   try {
     const group = await Group.findById(req.params.id);
     if (!group) return res.status(404).json({ error: 'Group not found' });
 
-    // Check if user is admin or moderator
-    const membership = await GroupMembership.findOne({
-      groupId: group._id,
+    // Check if user is the group creator
+    const isCreator = group.createdBy.toString() === req.user._id.toString();
+    
+    // Check if user is platform admin
+    const userRole = await UserRole.findOne({
       userId: req.user._id,
-      status: 'active',
-      role: { $in: ['admin', 'moderator'] }
+      role: 'admin',
+      isActive: true
     });
+    const isAdmin = !!userRole;
 
-    if (!membership) {
-      return res.status(403).json({ error: 'Access denied. Admin or moderator privileges required.' });
+    if (!isCreator && !isAdmin) {
+      return res.status(403).json({ error: 'Access denied. Only group creator or platform admin can edit this group.' });
     }
 
     const allowedFields = [
-      'title', 'intro', 'image', 'category', 'type', 'status'
+      'title', 'intro', 'image', 'type', 'status', 'rules'
     ];
+    
+    // Category should not be editable as it inherits from community
     allowedFields.forEach(field => {
       if (req.body[field] !== undefined) group[field] = req.body[field];
     });
@@ -567,3 +572,117 @@ exports.removeGroupRule = async (req, res) => {
   }
 };
 
+
+// Delete Group (Group creator or Platform admin only)
+exports.deleteGroup = async (req, res) => {
+  try {
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    // Check if user is the group creator
+    const isCreator = group.createdBy.toString() === req.user._id.toString();
+    
+    // Check if user is platform admin
+    const userRole = await UserRole.findOne({
+      userId: req.user._id,
+      role: 'admin',
+      isActive: true
+    });
+    const isAdmin = !!userRole;
+
+    if (!isCreator && !isAdmin) {
+      return res.status(403).json({ error: 'Access denied. Only group creator or platform admin can delete this group.' });
+    }
+
+    // Soft delete the group
+    group.status = 'deleted';
+    group.deletedAt = new Date();
+    group.deletedBy = req.user._id;
+    await group.save();
+
+    // Update community group count
+    const Community = require('../communities/community');
+    const community = await Community.findById(group.communityId);
+    if (community) {
+      community.groupCount = Math.max(0, community.groupCount - 1);
+      await community.save();
+    }
+
+    res.json({ success: true, message: 'Group deleted successfully' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+// Get Group Members (visible to all, detailed info for members)
+exports.getGroupMembers = async (req, res) => {
+  try {
+    const { page = 1, limit = 20, role } = req.query;
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    // Check if current user is a member for detailed info
+    let isMember = false;
+    let isAdmin = false;
+    
+    if (req.user) {
+      const membership = await GroupMembership.findOne({
+        groupId: group._id,
+        userId: req.user._id,
+        status: 'active'
+      });
+      isMember = !!membership;
+
+      // Check if user is platform admin
+      const userRole = await UserRole.findOne({
+        userId: req.user._id,
+        role: 'admin',
+        isActive: true
+      });
+      isAdmin = !!userRole;
+    }
+
+    let filter = {
+      groupId: group._id,
+      status: 'active'
+    };
+
+    if (role) filter.role = role;
+
+    const members = await GroupMembership.find(filter)
+      .populate('userId', isMember || isAdmin ? 'name avatar bio' : 'name avatar')
+      .sort({ role: 1, joinedAt: 1 }) // Admins first, then by join date
+      .skip((page - 1) * limit)
+      .limit(Number(limit));
+
+    const totalMembers = await GroupMembership.countDocuments(filter);
+
+    const membersWithRoles = members.map(member => {
+      const memberObj = member.toObject();
+      
+      // Add role labels
+      if (member.userId._id.toString() === group.createdBy.toString()) {
+        memberObj.roleLabel = 'Group Admin';
+      } else if (member.role === 'admin') {
+        memberObj.roleLabel = 'Admin';
+      } else if (member.role === 'moderator') {
+        memberObj.roleLabel = 'Moderator';
+      } else {
+        memberObj.roleLabel = 'Member';
+      }
+
+      return memberObj;
+    });
+
+    res.json({
+      members: membersWithRoles,
+      totalPages: Math.ceil(totalMembers / limit),
+      currentPage: parseInt(page),
+      totalMembers,
+      hasNextPage: page < Math.ceil(totalMembers / limit),
+      hasPrevPage: page > 1
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};

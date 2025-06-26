@@ -45,12 +45,12 @@ exports.uploadPostMedia = (req, res) => {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ success: false, message: 'No files uploaded.' });
     }
-    
+
     const fileUrls = req.files.map(file => ({
       url: `/uploads/post_media/${file.filename}`,
       mediaType: file.mimetype.startsWith('image/') ? 'image' : 'video'
     }));
-    
+
     res.json({ success: true, urls: fileUrls });
   });
 };
@@ -61,13 +61,13 @@ const profanityFilter = (text) => {
     'spam', 'scam', 'fake', 'stupid', 'idiot', 'hate', 'kill', 'die', 'damn', 'hell'
     // Add more words as needed
   ];
-  
+
   let filteredText = text;
   profanityWords.forEach(word => {
     const regex = new RegExp(word, 'gi');
     filteredText = filteredText.replace(regex, '*'.repeat(word.length));
   });
-  
+
   return filteredText;
 };
 
@@ -75,7 +75,7 @@ const profanityFilter = (text) => {
 exports.createPost = async (req, res) => {
   try {
     const { groupId } = req.params;
-    
+
     // Check if group exists
     const group = await Group.findById(groupId);
     if (!group) return res.status(404).json({ error: 'Group not found' });
@@ -95,7 +95,7 @@ exports.createPost = async (req, res) => {
       'content', 'mediaUrls', 'tags', 'isAnonymous', 'urgencyLevel', 'postType'
     ];
     const postData = { groupId, authorId: req.user._id };
-    
+
     allowedFields.forEach(field => {
       if (req.body[field] !== undefined) postData[field] = req.body[field];
     });
@@ -125,7 +125,7 @@ exports.createPost = async (req, res) => {
   }
 };
 
-// Get Posts by Group (Group members only)
+// Get Posts by Group (Visible to all, interactions for members only)
 exports.getPostsByGroup = async (req, res) => {
   try {
     const { groupId } = req.params;
@@ -135,29 +135,38 @@ exports.getPostsByGroup = async (req, res) => {
     const group = await Group.findById(groupId);
     if (!group) return res.status(404).json({ error: 'Group not found' });
 
-    // Check if user has access to view posts
+    // Posts are visible to all users, but interactions are restricted to members
+    let isMember = false;
+    let isAdmin = false;
+
     if (req.user) {
+      // Check if user is a member of the group
       const membership = await GroupMembership.findOne({
         groupId,
         userId: req.user._id,
         status: 'active'
       });
+      isMember = !!membership;
 
-      if (!membership) {
-        return res.status(403).json({ error: 'Access denied. Must be a group member to view posts.' });
-      }
-    } else {
-      return res.status(401).json({ error: 'Authentication required' });
+      // Check if user is platform admin
+      const userRole = await UserRole.findOne({
+        userId: req.user._id,
+        role: 'admin',
+        isActive: true
+      });
+      isAdmin = !!userRole;
     }
 
-    let filter = { groupId, isDeleted: false };
-    if (postType && postType !== 'all') filter.postType = postType;
-    if (urgencyLevel && urgencyLevel !== 'all') filter.urgencyLevel = urgencyLevel;
+    // Build query
+    const query = { groupId, isDeleted: false };
+    if (postType) query.postType = postType;
+    if (urgencyLevel) query.urgencyLevel = urgencyLevel;
 
+    // Sort options
     let sortOptions = {};
     switch (sortBy) {
       case 'popular':
-        sortOptions = { 'likes.length': -1, createdAt: -1 };
+        sortOptions = { likeCount: -1, createdAt: -1 };
         break;
       case 'urgent':
         sortOptions = { urgencyLevel: -1, isPinned: -1, createdAt: -1 };
@@ -166,35 +175,51 @@ exports.getPostsByGroup = async (req, res) => {
         sortOptions = { isPinned: -1, createdAt: -1 };
     }
 
-    const posts = await GroupPost.find(filter)
+    const posts = await GroupPost.find(query)
       .populate('authorId', 'name avatar bio')
+      .populate('groupId', 'title type')
       .populate('comments.userId', 'name avatar')
       .populate('pinnedBy', 'name')
       .sort(sortOptions)
-      .skip((page - 1) * limit)
-      .limit(Number(limit));
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
 
-    const postsWithStats = posts.map(post => {
+    const totalPosts = await GroupPost.countDocuments(query);
+
+    const postsWithDetails = posts.map(post => {
       const postObj = post.toObject();
       postObj.id = postObj._id;
       postObj.likeCount = post.likes.length;
       postObj.commentCount = post.comments.filter(c => !c.isDeleted).length;
       postObj.bookmarkCount = post.bookmarks.length;
-      
-      // Check if current user has liked/bookmarked
-      if (req.user) {
-        postObj.isLiked = post.likes.some(like => 
+
+      // Add interaction permissions
+      postObj.canInteract = isMember || isAdmin;
+
+      // Check if current user has liked/bookmarked (only if they can interact)
+      if (req.user && (isMember || isAdmin)) {
+        postObj.isLiked = post.likes.some(like =>
           like.userId.toString() === req.user._id.toString()
         );
-        postObj.isBookmarked = post.bookmarks.some(bookmark => 
+        postObj.isBookmarked = post.bookmarks.some(bookmark =>
           bookmark.userId.toString() === req.user._id.toString()
         );
+      } else {
+        postObj.isLiked = false;
+        postObj.isBookmarked = false;
       }
-      
+
       return postObj;
     });
 
-    res.json(postsWithStats);
+    res.json({
+      posts: postsWithDetails,
+      totalPages: Math.ceil(totalPosts / limit),
+      currentPage: parseInt(page),
+      totalPosts,
+      hasNextPage: page < Math.ceil(totalPosts / limit),
+      hasPrevPage: page > 1
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -235,10 +260,10 @@ exports.getPostById = async (req, res) => {
 
     // Check if current user has liked/bookmarked
     if (req.user) {
-      postObj.isLiked = post.likes.some(like => 
+      postObj.isLiked = post.likes.some(like =>
         like.userId.toString() === req.user._id.toString()
       );
-      postObj.isBookmarked = post.bookmarks.some(bookmark => 
+      postObj.isBookmarked = post.bookmarks.some(bookmark =>
         bookmark.userId.toString() === req.user._id.toString()
       );
     }
@@ -340,18 +365,25 @@ exports.toggleLike = async (req, res) => {
     const post = await GroupPost.findById(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
 
-    // Check if user is a member of the group
+    // Check if user is a member of the group or is an admin
     const membership = await GroupMembership.findOne({
       groupId: post.groupId,
       userId: req.user._id,
       status: 'active'
     });
 
-    if (!membership) {
+    // Check if user is platform admin
+    const userRole = await UserRole.findOne({
+      userId: req.user._id,
+      role: 'admin',
+      isActive: true
+    });
+
+    if (!membership && !userRole) {
       return res.status(403).json({ error: 'Access denied. Must be a group member to like posts.' });
     }
 
-    const existingLike = post.likes.find(like => 
+    const existingLike = post.likes.find(like =>
       like.userId.toString() === req.user._id.toString()
     );
 
@@ -364,10 +396,13 @@ exports.toggleLike = async (req, res) => {
       liked = true;
     }
 
-    res.json({ 
-      success: true, 
-      liked, 
-      likeCount: post.likes.length + (liked ? 1 : -1)
+    // Get the updated post to return accurate like count
+    const updatedPost = await GroupPost.findById(req.params.id);
+
+    res.json({
+      success: true,
+      liked,
+      likeCount: updatedPost.likes.length
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -441,7 +476,7 @@ exports.addReply = async (req, res) => {
 
     const updatedComment = updatedPost.comments.id(commentId);
     const reply = updatedComment.replies[updatedComment.replies.length - 1];
-    
+
     res.status(201).json(reply);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -465,7 +500,7 @@ exports.toggleBookmark = async (req, res) => {
       return res.status(403).json({ error: 'Access denied. Must be a group member to bookmark posts.' });
     }
 
-    const existingBookmark = post.bookmarks.find(bookmark => 
+    const existingBookmark = post.bookmarks.find(bookmark =>
       bookmark.userId.toString() === req.user._id.toString()
     );
 
@@ -478,9 +513,9 @@ exports.toggleBookmark = async (req, res) => {
       bookmarked = true;
     }
 
-    res.json({ 
-      success: true, 
-      bookmarked, 
+    res.json({
+      success: true,
+      bookmarked,
       bookmarkCount: post.bookmarks.length + (bookmarked ? 1 : -1)
     });
   } catch (err) {
@@ -488,13 +523,13 @@ exports.toggleBookmark = async (req, res) => {
   }
 };
 
-// Pin/Unpin Post (Admin/Moderator only)
+// Pin/Unpin Post (Group Admin/Moderator or Platform Admin)
 exports.togglePin = async (req, res) => {
   try {
     const post = await GroupPost.findById(req.params.id);
     if (!post) return res.status(404).json({ error: 'Post not found' });
 
-    // Check if user has moderation privileges
+    // Check if user has moderation privileges in the group
     const membership = await GroupMembership.findOne({
       groupId: post.groupId,
       userId: req.user._id,
@@ -502,7 +537,15 @@ exports.togglePin = async (req, res) => {
       role: { $in: ['admin', 'moderator'] }
     });
 
-    if (!membership) {
+    // Check if user is platform admin
+    const userRole = await UserRole.findOne({
+      userId: req.user._id,
+      role: 'admin',
+      isActive: true
+    });
+    const isPlatformAdmin = !!userRole;
+
+    if (!membership && !isPlatformAdmin) {
       return res.status(403).json({ error: 'Access denied. Admin or moderator privileges required.' });
     }
 
@@ -512,8 +555,8 @@ exports.togglePin = async (req, res) => {
       await post.pin(req.user._id);
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       isPinned: !post.isPinned,
       message: post.isPinned ? 'Post unpinned' : 'Post pinned'
     });
@@ -582,4 +625,3 @@ exports.reportPost = async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 };
-
