@@ -21,8 +21,8 @@ router.post('/group/:groupId',
 );
 
 router.get('/group/:groupId', 
-  auth, 
-  requireGroupMembership('active'), 
+  // auth, 
+  // requireGroupMembership('active'), 
   groupPostController.getPostsByGroup
 );
 
