@@ -8,8 +8,20 @@ const userRoleSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['admin', 'expert', 'user'],
+    enum: ['admin', 'expert', 'moderator', 'user'],
     required: true
+  },
+  // Community scope for role (null for platform-wide roles like admin)
+  communityId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Community',
+    default: null
+  },
+  // Group scope for role (null for community-wide or platform-wide roles)
+  groupId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Group',
+    default: null
   },
   permissions: [{
     type: String,
@@ -23,7 +35,10 @@ const userRoleSchema = new mongoose.Schema({
       'moderate_posts',
       'ban_users',
       'view_reports',
-      'mark_best_answer'
+      'mark_best_answer',
+      'pin_posts',
+      'edit_group',
+      'delete_group'
     ]
   }],
   assignedBy: {
@@ -73,10 +88,10 @@ const userRoleSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound index to ensure unique user-role combinations
-userRoleSchema.index({ userId: 1, role: 1 }, { unique: true });
-
-// Indexes for better query performance
+// Compound indexes for scoped roles
+userRoleSchema.index({ userId: 1, role: 1, communityId: 1, groupId: 1 }, { unique: true });
+userRoleSchema.index({ userId: 1, communityId: 1 });
+userRoleSchema.index({ userId: 1, groupId: 1 });
 userRoleSchema.index({ role: 1, isActive: 1 });
 userRoleSchema.index({ verificationStatus: 1 });
 userRoleSchema.index({ expertiseAreas: 1 });
@@ -95,7 +110,18 @@ userRoleSchema.pre('save', function(next) {
           'manage_groups',
           'moderate_posts',
           'ban_users',
-          'view_reports'
+          'view_reports',
+          'pin_posts',
+          'edit_group',
+          'delete_group'
+        ];
+        break;
+      case 'moderator':
+        this.permissions = [
+          'moderate_posts',
+          'ban_users',
+          'view_reports',
+          'pin_posts'
         ];
         break;
       case 'expert':
@@ -130,41 +156,97 @@ userRoleSchema.methods.hasPermission = function(permission) {
   return this.isActive && this.permissions.includes(permission);
 };
 
-// Static method to get user roles
-userRoleSchema.statics.getUserRoles = function(userId) {
-  return this.find({ userId, isActive: true })
+// Static method to get user roles (with scope)
+userRoleSchema.statics.getUserRoles = function(userId, communityId = null, groupId = null) {
+  const query = { userId, isActive: true };
+  if (communityId !== null) query.communityId = communityId;
+  if (groupId !== null) query.groupId = groupId;
+  
+  return this.find(query)
     .populate('assignedBy', 'name email')
-    .populate('verifiedBy', 'name email');
+    .populate('verifiedBy', 'name email')
+    .populate('communityId', 'title')
+    .populate('groupId', 'title');
 };
 
-// Static method to get users by role
-userRoleSchema.statics.getUsersByRole = function(role, isActive = true) {
-  return this.find({ role, isActive })
+// Static method to get users by role in a specific scope
+userRoleSchema.statics.getUsersByRole = function(role, communityId = null, groupId = null, isActive = true) {
+  const query = { role, isActive };
+  if (communityId !== null) query.communityId = communityId;
+  if (groupId !== null) query.groupId = groupId;
+  
+  return this.find(query)
     .populate('userId', 'name email avatar')
     .sort({ assignedAt: -1 });
 };
 
-// Static method to check if user has permission
-userRoleSchema.statics.userHasPermission = async function(userId, permission) {
-  // Accept both ObjectId and string userId
-  const query = [
-    { userId: userId, isActive: true }, // string match (for string userId)
-    { userId: { $eq: userId }, isActive: true } // ObjectId match (for ObjectId userId)
-  ];
-  const userRoles = await this.find({ $or: query });
-  return userRoles.some(role =>
-    role.role === 'admin' || role.hasPermission(permission)
-  );
+// Static method to check if user has permission in a specific scope
+userRoleSchema.statics.userHasPermission = async function(userId, permission, communityId = null, groupId = null) {
+  // Check platform-wide admin first
+  const adminRole = await this.findOne({ 
+    userId, 
+    role: 'admin', 
+    isActive: true,
+    communityId: null,
+    groupId: null
+  });
+  
+  if (adminRole && adminRole.hasPermission(permission)) {
+    return true;
+  }
+  
+  // Check scoped permissions
+  const query = { userId, isActive: true };
+  if (communityId !== null) {
+    query.$or = [
+      { communityId: communityId },
+      { communityId: null } // Include platform-wide roles
+    ];
+  }
+  if (groupId !== null) {
+    query.$or = [
+      { groupId: groupId },
+      { groupId: null } // Include community-wide and platform-wide roles
+    ];
+  }
+  
+  const userRoles = await this.find(query);
+  return userRoles.some(role => role.hasPermission(permission));
+};
+
+// Static method to get user's role in a specific community
+userRoleSchema.statics.getUserCommunityRole = function(userId, communityId) {
+  return this.findOne({ 
+    userId, 
+    communityId, 
+    isActive: true 
+  });
+};
+
+// Static method to get user's role in a specific group
+userRoleSchema.statics.getUserGroupRole = function(userId, groupId) {
+  return this.findOne({ 
+    userId, 
+    groupId, 
+    isActive: true 
+  });
 };
 
 // Static method to get pending expert verifications
-userRoleSchema.statics.getPendingExperts = function() {
-  return this.find({ 
+userRoleSchema.statics.getPendingExperts = function(communityId = null) {
+  const query = { 
     role: 'expert', 
     verificationStatus: 'pending',
     isActive: true 
-  })
+  };
+  
+  if (communityId) {
+    query.communityId = communityId;
+  }
+  
+  return this.find(query)
     .populate('userId', 'name email avatar')
+    .populate('communityId', 'title')
     .sort({ createdAt: -1 });
 };
 

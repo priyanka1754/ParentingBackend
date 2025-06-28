@@ -22,36 +22,73 @@ const postMediaStorage = multer.diskStorage({
 });
 
 const postMediaFileFilter = (req, file, cb) => {
-  const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'video/mp4', 'video/webm'];
-  if (allowedTypes.includes(file.mimetype)) {
+  const allowedImageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
+  const allowedVideoTypes = ['video/mp4', 'video/webm', 'video/avi', 'video/mov'];
+  const allowedDocTypes = ['application/pdf', 'text/plain'];
+  
+  const allAllowedTypes = [...allowedImageTypes, ...allowedVideoTypes, ...allowedDocTypes];
+  
+  if (allAllowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Invalid file type. Only JPEG, PNG, WEBP images and MP4/WEBM videos are allowed.'), false);
+    cb(new Error('Invalid file type. Only images (JPEG, PNG, WEBP, GIF), videos (MP4, WEBM, AVI, MOV), and documents (PDF, TXT) are allowed.'), false);
   }
 };
 
 const uploadPostMediaMulter = multer({
   storage: postMediaStorage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB max
+  limits: { 
+    fileSize: 50 * 1024 * 1024, // 50MB max per file
+    files: 10 // Allow up to 10 files
+  },
   fileFilter: postMediaFileFilter
-}).array('media', 5); // Allow up to 5 files
+}).array('media', 10); // Allow up to 10 files
 
-// Controller for post media upload
+// Enhanced controller for post media upload
 exports.uploadPostMedia = (req, res) => {
   uploadPostMediaMulter(req, res, function (err) {
     if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'File too large. Maximum size is 50MB per file.' 
+        });
+      }
+      if (err.code === 'LIMIT_FILE_COUNT') {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Too many files. Maximum 10 files allowed.' 
+        });
+      }
       return res.status(400).json({ success: false, message: err.message });
     }
+    
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ success: false, message: 'No files uploaded.' });
     }
 
-    const fileUrls = req.files.map(file => ({
-      url: `/uploads/post_media/${file.filename}`,
-      mediaType: file.mimetype.startsWith('image/') ? 'image' : 'video'
-    }));
+    const fileUrls = req.files.map(file => {
+      let mediaType = 'document';
+      if (file.mimetype.startsWith('image/')) {
+        mediaType = 'image';
+      } else if (file.mimetype.startsWith('video/')) {
+        mediaType = 'video';
+      }
 
-    res.json({ success: true, urls: fileUrls });
+      return {
+        url: `/uploads/post_media/${file.filename}`,
+        mediaType,
+        originalName: file.originalname,
+        size: file.size,
+        mimeType: file.mimetype
+      };
+    });
+
+    res.json({ 
+      success: true, 
+      urls: fileUrls,
+      message: `Successfully uploaded ${fileUrls.length} file(s)`
+    });
   });
 };
 

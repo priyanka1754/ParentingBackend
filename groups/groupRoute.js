@@ -8,6 +8,7 @@ const {
   requireGroupAdmin,
   optionalAuth 
 } = require('../middleware/authorization');
+const isGroupAdmin = require("../middleware/isGroupAdmin"); // Adjust path as needed
 
 // Media upload route (authenticated users only)
 router.post('/upload-media', auth, groupController.uploadGroupMedia);
@@ -16,8 +17,8 @@ router.post('/upload-media', auth, groupController.uploadGroupMedia);
 router.post('/', auth, groupController.createGroup);
 router.get('/community/:communityId', optionalAuth, groupController.getGroupsByCommunity);
 router.get('/:id', optionalAuth, groupController.getGroupById);
-router.put('/:id', auth, groupController.updateGroup); // Updated to use creator/admin check
-router.delete('/:id', auth, groupController.deleteGroup); // New delete route
+router.put("/:id", auth, isGroupAdmin, groupController.updateGroup);
+router.delete("/:id", auth, isGroupAdmin, groupController.deleteGroup);// New delete route
 
 // Group membership routes
 router.post('/:id/join', auth, groupController.joinGroup);

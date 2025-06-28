@@ -686,3 +686,58 @@ exports.getGroupMembers = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// Update Group (Group creator or Platform admin only)
+exports.updateGroup = async (req, res) => {
+  try {
+    const { title, intro, type, category, rules } = req.body;
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    // Check if user is the group creator
+    const isCreator = group.createdBy.toString() === req.user._id.toString();
+    
+    // Check if user is platform admin
+    const userRole = await UserRole.findOne({
+      userId: req.user._id,
+      role: 'admin',
+      communityId: null,
+      isActive: true
+    });
+    const isPlatformAdmin = !!userRole;
+
+    if (!isCreator && !isPlatformAdmin) {
+      return res.status(403).json({ 
+        error: 'Access denied. Only group creator or platform admin can edit this group.' 
+      });
+    }
+
+    // Update allowed fields
+    if (title !== undefined) group.title = title;
+    if (intro !== undefined) group.intro = intro;
+    if (type !== undefined && ['Public', 'Private', 'Secret'].includes(type)) {
+      group.type = type;
+    }
+    if (category !== undefined) group.category = category;
+    if (rules !== undefined && Array.isArray(rules)) {
+      group.rules = rules;
+    }
+
+    group.updatedAt = new Date();
+    await group.save();
+
+    // Populate for response
+    await group.populate('communityId', 'title category');
+    await group.populate('createdBy', 'name avatar');
+
+    res.json({
+      success: true,
+      message: 'Group updated successfully',
+      group
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+};
+
+
