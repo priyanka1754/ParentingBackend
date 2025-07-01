@@ -206,17 +206,30 @@ exports.getGroupById = async (req, res) => {
     
     // Check current user's membership status
     if (req.user) {
-      const membership = await GroupMembership.findOne({
-        groupId: group._id,
-        userId: req.user._id,
-        status: { $in: ['active', 'pending'] }
-      });
-      groupObj.userMembership = membership ? {
-        status: membership.status,
-        role: membership.role,
-        joinedAt: membership.joinedAt
-      } : null;
-    }
+  const membership = await GroupMembership.findOne({
+    groupId: group._id,
+    userId: req.user._id,
+    status: { $in: ['active', 'pending'] }
+  });
+
+  if (membership) {
+    groupObj.userMembership = {
+      status: membership.status,
+      role: membership.role,
+      joinedAt: membership.joinedAt
+    };
+  } else if (req.user.role === 'admin') {
+    // Manually treat platform admin as group admin with full access
+    groupObj.userMembership = {
+      status: 'active',
+      role: 'admin',
+      joinedAt: null // or new Date() if needed
+    };
+  } else {
+    groupObj.userMembership = null;
+  }
+}
+
     
     res.json(groupObj);
   } catch (err) {

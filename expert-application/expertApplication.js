@@ -95,7 +95,7 @@ const expertApplicationSchema = new mongoose.Schema({
 });
 
 // Indexes for better query performance
-expertApplicationSchema.index({ userId: 1, communityId: 1 });
+// expertApplicationSchema.index({ userId: 1, communityId: 1 });
 expertApplicationSchema.index({ communityId: 1, status: 1 });
 expertApplicationSchema.index({ status: 1, submittedAt: -1 });
 

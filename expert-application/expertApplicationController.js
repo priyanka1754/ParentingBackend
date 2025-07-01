@@ -334,14 +334,5 @@ exports.updateApplication = async (req, res) => {
   }
 };
 
-module.exports = {
-  submitApplication,
-  getUserApplication,
-  getPendingApplications,
-  getAllApplications,
-  approveApplication,
-  rejectApplication,
-  getApplicationById,
-  updateApplication
-};
+
 
