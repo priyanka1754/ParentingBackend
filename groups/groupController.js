@@ -754,3 +754,72 @@ exports.updateGroup = async (req, res) => {
 };
 
 
+
+
+
+
+// Assign Moderator (Group Admin only)
+exports.assignModerator = async (req, res) => {
+  try {
+    const { groupId, userId } = req.params;
+
+    const membership = await GroupMembership.findOne({
+      groupId,
+      userId,
+      status: "active",
+    });
+
+    if (!membership) {
+      return res.status(404).json({ error: "User is not an active member of this group." });
+    }
+
+    if (membership.role === "admin") {
+      return res.status(400).json({ error: "Cannot change role of group admin." });
+    }
+
+    if (membership.role === "moderator") {
+      return res.status(400).json({ error: "User is already a moderator." });
+    }
+
+    membership.role = "moderator";
+    await membership.save();
+
+    res.json({ success: true, message: "User assigned as moderator successfully.", membership });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Remove Moderator (Group Admin only)
+exports.removeModerator = async (req, res) => {
+  try {
+    const { groupId, userId } = req.params;
+
+    const membership = await GroupMembership.findOne({
+      groupId,
+      userId,
+      status: "active",
+    });
+
+    if (!membership) {
+      return res.status(404).json({ error: "User is not an active member of this group." });
+    }
+
+    if (membership.role === "admin") {
+      return res.status(400).json({ error: "Cannot change role of group admin." });
+    }
+
+    if (membership.role === "member") {
+      return res.status(400).json({ error: "User is not a moderator." });
+    }
+
+    membership.role = "member";
+    await membership.save();
+
+    res.json({ success: true, message: "User removed as moderator successfully.", membership });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+

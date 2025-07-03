@@ -8,7 +8,7 @@ const userRoleSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['admin', 'expert', 'moderator', 'user'],
+    enum: ['admin', 'expert', 'moderator', 'groupAdmin','user'],
     required: true
   },
   // Community scope for role (null for platform-wide roles like admin)

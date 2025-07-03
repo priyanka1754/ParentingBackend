@@ -297,12 +297,26 @@ exports.getPostsByGroup = async (req, res) => {
         // ✅ Inject roles only, don't overwrite author
         if (typeof postObj.authorId === "object" && postObj.authorId !== null) {
           const authorId = postObj.authorId._id;
-          const roles = await UserRole.find({
+          let roles = await UserRole.find({
             userId: authorId,
             isActive: true,
           }).lean();
+          // Convert communityId and groupId to string if they are objects
+         roles = roles.map(role => ({
+  ...role,
+  communityId: role.communityId
+    ? (typeof role.communityId === 'object' && role.communityId._id
+        ? role.communityId._id.toString()
+        : role.communityId.toString())
+    : undefined,
+  groupId: role.groupId
+    ? (typeof role.groupId === 'object' && role.groupId._id
+        ? role.groupId._id.toString()
+        : role.groupId.toString())
+    : undefined,
+}));
           postObj.authorId.roles = roles;
-          console.log("Roles for post:", roles);
+          // console.log("Roles for post:", roles);
         }
 
         return postObj;

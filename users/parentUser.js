@@ -74,3 +74,13 @@ userSchema.methods.comparePassword = function (inputPassword) {
 // module.exports = mongoose.model('User', userSchema);
 module.exports = mongoose.models.ParentUser || mongoose.model('ParentUser', userSchema);
 
+// userSchema.virtual("roles", {
+//   ref: "UserRole",
+//   localField: "_id",
+//   foreignField: "userId",
+//   justOne: false // A user can have multiple roles
+// });
+
+// // Ensure virtuals are included when converting to JSON
+// userSchema.set("toJSON", { virtuals: true });
+// userSchema.set("toObject", { virtuals: true });

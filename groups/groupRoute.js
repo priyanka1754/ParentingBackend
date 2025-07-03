@@ -33,6 +33,10 @@ router.post('/:id/reject-request', auth, requireGroupModerator, groupController.
 // Group rules management (Admin only)
 router.post('/:id/rules', auth, requireGroupAdmin, groupController.addGroupRule);
 router.delete('/:id/rules/:ruleId', auth, requireGroupAdmin, groupController.removeGroupRule);
+// // Moderator assignment routes (Group Admin only)
+// router.post("/:groupId/members/:userId/assign-moderator", auth, requireGroupAdmin, groupController.assignModerator);
+// router.post("/:groupId/members/:userId/remove-moderator", auth, requireGroupAdmin, groupController.removeModerator);
+
 
 module.exports = router;
 
