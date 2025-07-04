@@ -26,8 +26,12 @@ router.post('/:id/leave', auth, requireGroupMembership('active'), groupControlle
 router.get('/:id/members', optionalAuth, groupController.getGroupMembers); // Updated to show members to all
 
 // Join request management routes (Admin/Moderator only)
-router.get('/:id/pending-requests', auth, requireGroupModerator, groupController.getPendingRequests);
-router.post('/:id/approve-request', auth, requireGroupModerator, groupController.approveJoinRequest);
+router.get('/:id/join-requests', auth, requireGroupModerator, groupController.getPendingRequests);
+// RESTful: Accept/reject join request by membershipId
+router.post('/:groupId/join-requests/:membershipId/accept', auth, requireGroupModerator, groupController.approveJoinRequest);
+router.post('/:groupId/join-requests/:membershipId/reject', auth, requireGroupModerator, groupController.rejectJoinRequest);
+// Legacy (if still used anywhere)
+router.post('/:id/accept', auth, requireGroupModerator, groupController.approveJoinRequest);
 router.post('/:id/reject-request', auth, requireGroupModerator, groupController.rejectJoinRequest);
 
 // Group rules management (Admin only)

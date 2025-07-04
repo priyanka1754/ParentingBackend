@@ -105,22 +105,30 @@ const requireGroupMembership = (membershipStatus = 'active', roles = null) => {
         status: { $in: statusArray }
       });
 
-      if (!membership) {
+      // Check if user is platform admin (global admin, no communityId restriction)
+      const UserRole = require('../users/userRole');
+      const isPlatformAdmin = !!(await UserRole.findOne({
+        userId: req.user._id,
+        role: 'admin',
+        isActive: true
+      }));
+
+      if (!membership && !isPlatformAdmin) {
         return res.status(403).json({
           success: false,
           message: 'Access denied. Group membership required.'
         });
       }
 
-      if (roleArray && !roleArray.includes(membership.role)) {
+      if (roleArray && membership && !roleArray.includes(membership.role) && !isPlatformAdmin) {
         return res.status(403).json({
           success: false,
           message: `Access denied. Required role: ${roleArray.join(' or ')}.`
         });
       }
 
-      // Attach membership info to request
-      req.groupMembership = membership;
+      // Attach membership info to request (if any)
+      if (membership) req.groupMembership = membership;
       next();
     } catch (error) {
       console.error('Group membership check error:', error);

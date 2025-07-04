@@ -54,23 +54,23 @@ exports.uploadGroupMedia = (req, res) => {
 exports.createGroup = async (req, res) => {
   try {
     const allowedFields = [
-      'title', 'intro', 'image', 'category', 'type', 'communityId'
+      'title', 'intro', 'image', 'category', 'type', 'communityId', 'rules'
     ];
     const groupData = {};
     allowedFields.forEach(field => {
       if (req.body[field] !== undefined) groupData[field] = req.body[field];
     });
-    
+
     // Verify community exists
     const community = await Community.findById(groupData.communityId);
     if (!community) {
       return res.status(404).json({ error: 'Community not found' });
     }
-    
+
     groupData.createdBy = req.user._id;
     const group = new Group(groupData);
     await group.save();
-    
+
     // Create membership for the creator
     const membership = new GroupMembership({
       groupId: group._id,
@@ -81,12 +81,12 @@ exports.createGroup = async (req, res) => {
       approvedBy: req.user._id
     });
     await membership.save();
-    
+
     // Fetch the group again with creator populated
     const populatedGroup = await Group.findById(group._id)
       .populate('communityId', 'title category')
       .populate('createdBy', 'name avatar bio');
-    
+
     const groupObj = populatedGroup.toObject();
     groupObj.id = groupObj._id;
     res.status(201).json(groupObj);
@@ -243,25 +243,33 @@ exports.updateGroup = async (req, res) => {
     const group = await Group.findById(req.params.id);
     if (!group) return res.status(404).json({ error: 'Group not found' });
 
-    // Check if user is the group creator
-    const isCreator = group.createdBy.toString() === req.user._id.toString();
-    
-    // Check if user is platform admin
-    const userRole = await UserRole.findOne({
+    // Check if user is platform admin (global admin, no communityId restriction)
+    const isPlatformAdmin = !!(await UserRole.findOne({
       userId: req.user._id,
       role: 'admin',
       isActive: true
-    });
-    const isAdmin = !!userRole;
-
-    if (!isCreator && !isAdmin) {
-      return res.status(403).json({ error: 'Access denied. Only group creator or platform admin can edit this group.' });
+    }));
+    if (isPlatformAdmin) {
+      // Platform admin can always edit
+    } else {
+      // Check if user is the group creator
+      const isCreator = group.createdBy.toString() === req.user._id.toString();
+      // Check if user is group admin or moderator
+      const membership = await GroupMembership.findOne({
+        groupId: group._id,
+        userId: req.user._id,
+        status: 'active',
+        role: { $in: ['admin', 'groupAdmin', 'moderator'] }
+      });
+      const isGroupAdminOrMod = !!membership;
+      if (!isCreator && !isGroupAdminOrMod) {
+        return res.status(403).json({ error: 'Access denied. Only group creator, platform admin, group admin, or moderator can edit this group.' });
+      }
     }
 
     const allowedFields = [
       'title', 'intro', 'image', 'type', 'status', 'rules'
     ];
-    
     // Category should not be editable as it inherits from community
     allowedFields.forEach(field => {
       if (req.body[field] !== undefined) group[field] = req.body[field];
@@ -455,11 +463,14 @@ exports.getPendingRequests = async (req, res) => {
   }
 };
 
-// Approve Join Request (Admin/Moderator only)
+
+// Approve Join Request (Admin/Moderator only) - new RESTful endpoint: POST /groups/:id/join-requests/:membershipId/accept
 exports.approveJoinRequest = async (req, res) => {
   try {
-    const { userId } = req.body;
-    const group = await Group.findById(req.params.id);
+    // Support both legacy and RESTful routes
+    const groupId = req.params.groupId || req.params.id;
+    const membershipId = req.params.membershipId || req.params.membershipId || req.body.membershipId || req.params.id;
+    const group = await Group.findById(groupId);
     if (!group) return res.status(404).json({ error: 'Group not found' });
 
     // Check if user is admin or moderator
@@ -469,38 +480,31 @@ exports.approveJoinRequest = async (req, res) => {
       status: 'active',
       role: { $in: ['admin', 'moderator'] }
     });
-
     if (!adminMembership) {
       return res.status(403).json({ error: 'Access denied. Admin or moderator privileges required.' });
     }
 
-    const membership = await GroupMembership.findOne({
-      groupId: group._id,
-      userId,
-      status: 'pending'
-    });
-
-    if (!membership) {
+    const membership = await GroupMembership.findById(membershipId);
+    if (!membership || membership.groupId.toString() !== group._id.toString() || membership.status !== 'pending') {
       return res.status(404).json({ error: 'Join request not found' });
     }
 
     await membership.approve(req.user._id);
-
-    // Update group member count
     group.memberCount += 1;
     await group.save();
-
     res.json({ success: true, message: 'Join request approved' });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 };
 
-// Reject Join Request (Admin/Moderator only)
+// Reject Join Request (Admin/Moderator only) - new RESTful endpoint: POST /groups/:id/join-requests/:membershipId/reject
 exports.rejectJoinRequest = async (req, res) => {
   try {
-    const { userId } = req.body;
-    const group = await Group.findById(req.params.id);
+    // Support both legacy and RESTful routes
+    const groupId = req.params.groupId || req.params.id;
+    const membershipId = req.params.membershipId || req.params.membershipId || req.body.membershipId || req.params.id;
+    const group = await Group.findById(groupId);
     if (!group) return res.status(404).json({ error: 'Group not found' });
 
     // Check if user is admin or moderator
@@ -510,23 +514,16 @@ exports.rejectJoinRequest = async (req, res) => {
       status: 'active',
       role: { $in: ['admin', 'moderator'] }
     });
-
     if (!adminMembership) {
       return res.status(403).json({ error: 'Access denied. Admin or moderator privileges required.' });
     }
 
-    const membership = await GroupMembership.findOne({
-      groupId: group._id,
-      userId,
-      status: 'pending'
-    });
-
-    if (!membership) {
+    const membership = await GroupMembership.findById(membershipId);
+    if (!membership || membership.groupId.toString() !== group._id.toString() || membership.status !== 'pending') {
       return res.status(404).json({ error: 'Join request not found' });
     }
 
     await GroupMembership.findByIdAndDelete(membership._id);
-
     res.json({ success: true, message: 'Join request rejected' });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -592,19 +589,28 @@ exports.deleteGroup = async (req, res) => {
     const group = await Group.findById(req.params.id);
     if (!group) return res.status(404).json({ error: 'Group not found' });
 
-    // Check if user is the group creator
-    const isCreator = group.createdBy.toString() === req.user._id.toString();
-    
-    // Check if user is platform admin
-    const userRole = await UserRole.findOne({
+    // Check if user is platform admin (global admin, no communityId restriction)
+    const isPlatformAdmin = !!(await UserRole.findOne({
       userId: req.user._id,
       role: 'admin',
       isActive: true
-    });
-    const isAdmin = !!userRole;
-
-    if (!isCreator && !isAdmin) {
-      return res.status(403).json({ error: 'Access denied. Only group creator or platform admin can delete this group.' });
+    }));
+    if (isPlatformAdmin) {
+      // Platform admin can always delete
+    } else {
+      // Check if user is the group creator
+      const isCreator = group.createdBy.toString() === req.user._id.toString();
+      // Check if user is group admin or moderator
+      const membership = await GroupMembership.findOne({
+        groupId: group._id,
+        userId: req.user._id,
+        status: 'active',
+        role: { $in: ['admin', 'groupAdmin', 'moderator'] }
+      });
+      const isGroupAdminOrMod = !!membership;
+      if (!isCreator && !isGroupAdminOrMod) {
+        return res.status(403).json({ error: 'Access denied. Only group creator, platform admin, group admin, or moderator can delete this group.' });
+      }
     }
 
     // Soft delete the group

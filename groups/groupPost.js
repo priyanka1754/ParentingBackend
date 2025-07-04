@@ -100,12 +100,11 @@ const groupPostSchema = new mongoose.Schema({
     maxlength: 5000
   },
   mediaUrls: [{
-    type: String,
-    url: String,
-    mediaType: {
-      type: String,
-      enum: ['image', 'video']
-    }
+    url: { type: String, required: true },
+    mediaType: { type: String, enum: ['image', 'video', 'audio', 'document'], required: true },
+    originalName: { type: String },
+    size: { type: Number },
+    mimeType: { type: String }
   }],
   tags: [{
     type: String,

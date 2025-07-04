@@ -16,7 +16,14 @@ async function isGroupAdmin(req, res, next) {
       return res.status(401).json({ message: "Unauthorized: User not authenticated." });
     }
 
-    if (!group.admins.some(a => a.userId.equals(req.user._id))) {
+    // Allow platform admin (global admin, no communityId restriction)
+    const UserRole = require("../users/userRole");
+    const isPlatformAdmin = !!(await UserRole.findOne({
+      userId: req.user._id,
+      role: 'admin',
+      isActive: true
+    }));
+    if (!group.admins.some(a => a.userId.equals(req.user._id)) && !isPlatformAdmin) {
       return res.status(403).json({ message: "Forbidden: Only group admins can perform this action." });
     }
     next();

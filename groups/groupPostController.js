@@ -2,6 +2,7 @@ const GroupPost = require("./groupPost");
 const Group = require("./group");
 const GroupMembership = require("./groupMembership");
 const UserRole = require("../users/userRole");
+const RoleAggregationService = require("../services/roleAggregateService");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
@@ -39,11 +40,21 @@ const postMediaFileFilter = (req, file, cb) => {
     "video/avi",
     "video/mov",
   ];
+  const allowedAudioTypes = [
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/wav",
+    "audio/ogg",
+    "audio/x-wav",
+    "audio/x-m4a",
+    "audio/aac"
+  ];
   const allowedDocTypes = ["application/pdf", "text/plain"];
 
   const allAllowedTypes = [
     ...allowedImageTypes,
     ...allowedVideoTypes,
+    ...allowedAudioTypes,
     ...allowedDocTypes,
   ];
 
@@ -52,7 +63,7 @@ const postMediaFileFilter = (req, file, cb) => {
   } else {
     cb(
       new Error(
-        "Invalid file type. Only images (JPEG, PNG, WEBP, GIF), videos (MP4, WEBM, AVI, MOV), and documents (PDF, TXT) are allowed."
+        "Invalid file type. Only images (JPEG, PNG, WEBP, GIF), videos (MP4, WEBM, AVI, MOV), audio (MP3, WAV, OGG, AAC), and documents (PDF, TXT) are allowed."
       ),
       false
     );
@@ -99,8 +110,9 @@ exports.uploadPostMedia = (req, res) => {
         mediaType = "image";
       } else if (file.mimetype.startsWith("video/")) {
         mediaType = "video";
+      } else if (file.mimetype.startsWith("audio/")) {
+        mediaType = "audio";
       }
-
       return {
         url: `/uploads/post_media/${file.filename}`,
         mediaType,
@@ -152,14 +164,9 @@ exports.createPost = async (req, res) => {
     const group = await Group.findById(groupId);
     if (!group) return res.status(404).json({ error: "Group not found" });
 
-    // Check if user is a member of the group
-    const membership = await GroupMembership.findOne({
-      groupId,
-      userId: req.user._id,
-      status: "active",
-    });
-
-    if (!membership) {
+    // Check if user can post in this group using RoleAggregationService
+    const canPost = await RoleAggregationService.canUserPostInGroup(req.user._id, groupId);
+    if (!canPost) {
       return res
         .status(403)
         .json({ error: "Access denied. Must be a group member to post." });
@@ -178,6 +185,22 @@ exports.createPost = async (req, res) => {
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) postData[field] = req.body[field];
     });
+
+    // Validate mediaUrls structure if present
+    if (postData.mediaUrls) {
+      if (!Array.isArray(postData.mediaUrls)) {
+        return res.status(400).json({ error: 'mediaUrls must be an array.' });
+      }
+      for (const media of postData.mediaUrls) {
+        if (
+          !media.url ||
+          !media.mediaType ||
+          !['image', 'video', 'audio', 'document'].includes(media.mediaType)
+        ) {
+          return res.status(400).json({ error: 'Each media must have url and valid mediaType.' });
+        }
+      }
+    }
 
     // Apply profanity filter to content
     if (postData.content) {
@@ -198,6 +221,20 @@ exports.createPost = async (req, res) => {
 
     const postObj = populatedPost.toObject();
     postObj.id = postObj._id;
+    
+    // Add role information to the author
+    if (typeof postObj.authorId === "object" && postObj.authorId !== null) {
+      try {
+        const userRoles = await RoleAggregationService.getUserRolesInGroup(req.user._id, groupId);
+        postObj.authorId.roles = userRoles;
+        postObj.authorId.roleDisplay = RoleAggregationService.formatRoleDisplay(userRoles);
+      } catch (error) {
+        console.error("Error fetching user roles:", error);
+        postObj.authorId.roles = [];
+        postObj.authorId.roleDisplay = '';
+      }
+    }
+    
     res.status(201).json(postObj);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -294,29 +331,18 @@ exports.getPostsByGroup = async (req, res) => {
           postObj.isBookmarked = false;
         }
 
-        // ✅ Inject roles only, don't overwrite author
+        // ✅ Inject roles using RoleAggregationService
         if (typeof postObj.authorId === "object" && postObj.authorId !== null) {
           const authorId = postObj.authorId._id;
-          let roles = await UserRole.find({
-            userId: authorId,
-            isActive: true,
-          }).lean();
-          // Convert communityId and groupId to string if they are objects
-         roles = roles.map(role => ({
-  ...role,
-  communityId: role.communityId
-    ? (typeof role.communityId === 'object' && role.communityId._id
-        ? role.communityId._id.toString()
-        : role.communityId.toString())
-    : undefined,
-  groupId: role.groupId
-    ? (typeof role.groupId === 'object' && role.groupId._id
-        ? role.groupId._id.toString()
-        : role.groupId.toString())
-    : undefined,
-}));
-          postObj.authorId.roles = roles;
-          // console.log("Roles for post:", roles);
+          try {
+            const userRoles = await RoleAggregationService.getUserRolesInGroup(authorId, groupId);
+            postObj.authorId.roles = userRoles;
+            postObj.authorId.roleDisplay = RoleAggregationService.formatRoleDisplay(userRoles);
+          } catch (error) {
+            console.error("Error fetching user roles:", error);
+            postObj.authorId.roles = [];
+            postObj.authorId.roleDisplay = '';
+          }
         }
 
         return postObj;
